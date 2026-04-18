@@ -54,6 +54,15 @@ def test_copy_missing_key_raises(tmp_vault):
         copy_keys(tmp_vault, "dev", "staging", PASSWORD, keys=["MISSING"])
 
 
+def test_copy_missing_key_error_lists_keys(tmp_vault):
+    """CopyError message should include the names of the missing keys."""
+    save_profile(tmp_vault, "dev", {"A": "1"}, PASSWORD)
+    with pytest.raises(CopyError) as exc_info:
+        copy_keys(tmp_vault, "dev", "staging", PASSWORD, keys=["MISSING", "ALSO_MISSING"])
+    assert "MISSING" in str(exc_info.value)
+    assert "ALSO_MISSING" in str(exc_info.value)
+
+
 def test_copy_summary_copied(tmp_vault):
     save_profile(tmp_vault, "dev", {"A": "1"}, PASSWORD)
     result = copy_keys(tmp_vault, "dev", "staging", PASSWORD)
