@@ -29,6 +29,9 @@ def lock(profile, env_file):
     if password != confirm:
         click.echo("Error: passwords do not match.", err=True)
         sys.exit(1)
+    if not password:
+        click.echo("Error: password must not be empty.", err=True)
+        sys.exit(1)
     content = path.read_text()
     save_profile(profile, content, password)
     click.echo(f"Profile '{profile}' saved to vault.")
@@ -38,8 +41,17 @@ def lock(profile, env_file):
 @click.argument("profile")
 @click.option("--output", "-o", default=".env", show_default=True,
               help="Destination file for decrypted content.")
-def unlock(profile, output):
+@click.option("--force", "-f", is_flag=True, default=False,
+              help="Overwrite output file if it already exists.")
+def unlock(profile, output, force):
     """Decrypt PROFILE from vault and write to file."""
+    out_path = Path(output)
+    if out_path.exists() and not force:
+        click.echo(
+            f"Error: '{output}' already exists. Use --force to overwrite.",
+            err=True,
+        )
+        sys.exit(1)
     password = getpass.getpass("Password: ")
     try:
         content = load_profile(profile, password)
@@ -49,7 +61,7 @@ def unlock(profile, output):
     except Exception:
         click.echo("Error: decryption failed. Wrong password?", err=True)
         sys.exit(1)
-    Path(output).write_text(content)
+    out_path.write_text(content)
     click.echo(f"Profile '{profile}' written to '{output}'.")
 
 
