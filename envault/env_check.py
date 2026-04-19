@@ -27,6 +27,7 @@ def check_env(profile_data: Dict[str, str], reference_data: Dict[str, str]) -> E
 
 
 def format_check(result: EnvCheckResult) -> str:
+    """Format an EnvCheckResult into a human-readable string."""
     lines = []
     if result.ok:
         lines.append("✓ Profile matches reference .env file.")
@@ -41,3 +42,16 @@ def format_check(result: EnvCheckResult) -> str:
                 lines.append(f"  + {k}")
     lines.append(f"Common keys: {len(result.common)}")
     return "\n".join(lines)
+
+
+def check_env_values(profile_data: Dict[str, str], reference_data: Dict[str, str]) -> List[str]:
+    """Return keys that are present in both dicts but have empty values in the profile.
+
+    This helps catch keys that exist in the profile but were left blank,
+    which may indicate an incomplete configuration.
+    """
+    return sorted(
+        key
+        for key in profile_data
+        if key in reference_data and profile_data[key].strip() == ""
+    )
