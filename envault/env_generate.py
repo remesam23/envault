@@ -1,123 +1,97 @@
-"""env_generate.py — Generate random values for environment variable keys.
-
-Supports multiple value types: secret (random hex), uuid, password (alphanumeric+symbols),
-numeric, and boolean. Useful for bootstrapping new profiles with secure defaults.
-"""
+"""Generate random values for environment variable keys."""
 
 import secrets
 import string
-import uuid as _uuid
+import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
-
-VALID_TYPES = ("secret", "uuid", "password", "numeric", "bool")
-
-DEFAULT_SECRET_BYTES = 32
-DEFAULT_PASSWORD_LENGTH = 24
-DEFAULT_NUMERIC_LENGTH = 8
+from typing import Optional
 
 
 class GenerateError(Exception):
-    """Raised when key generation fails."""
+    pass
 
 
 @dataclass
 class GeneratedKey:
     key: str
     value: str
-    type: str
+    length: int
+    charset: str
 
 
 @dataclass
 class GenerateResult:
-    generated: List[GeneratedKey] = field(default_factory=list)
-    skipped: List[str] = field(default_factory=list)
-
-    @property
-    def ok(self) -> bool:
-        return len(self.generated) > 0 or len(self.skipped) == 0
-
-    def as_dict(self) -> Dict[str, str]:
-        return {g.key: g.value for g in self.generated}
+    generated: list[GeneratedKey] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+    is_ok: bool = True
+    error: Optional[str] = None
 
 
-def _generate_value(value_type: str, length: Optional[int] = None) -> str:
-    """Generate a single random value of the given type."""
-    if value_type == "secret":
-        byte_count = length if length else DEFAULT_SECRET_BYTES
-        return secrets.token_hex(byte_count)
-
-    elif value_type == "uuid":
-        return str(_uuid.uuid4())
-
-    elif value_type == "password":
-        pw_len = length if length else DEFAULT_PASSWORD_LENGTH
-        alphabet = string.ascii_letters + string.digits + "!@#$%^&*()-_=+"
-        return "".join(secrets.choice(alphabet) for _ in range(pw_len))
-
-    elif value_type == "numeric":
-        num_len = length if length else DEFAULT_NUMERIC_LENGTH
-        return "".join(secrets.choice(string.digits) for _ in range(num_len))
-
-    elif value_type == "bool":
-        return secrets.choice(["true", "false"])
-
-    else:
-        raise GenerateError(
-            f"Unknown value type '{value_type}'. "
-            f"Valid types: {', '.join(VALID_TYPES)}"
-        )
+def ok(generated: list[GeneratedKey], skipped: list[str]) -> GenerateResult:
+    return GenerateResult(generated=generated, skipped=skipped)
 
 
-def generate_keys(
-    keys: List[str],
-    value_type: str = "secret",
-    length: Optional[int] = None,
-    existing: Optional[Dict[str, str]] = None,
+def as_dict(result: GenerateResult) -> dict[str, str]:
+    return {g.key: g.value for g in result.generated}
+
+
+CHARSETS = {
+    "alpha": string.ascii_letters,
+    "alphanum": string.ascii_letters + string.digits,
+    "hex": string.hexdigits[:16],
+    "numeric": string.digits,
+    "base64url": string.ascii_letters + string.digits + "-_",
+    "printable": string.ascii_letters + string.digits + string.punctuation,
+}
+
+
+def _generate_value(length: int, charset: str) -> str:
+    chars = CHARSET_CHARS(charset)
+    return "".join(secrets.choice(chars) for _ in range(length))
+
+
+def CHARSET_CHARS(charset: str) -> str:
+    if charset in CHARSETS:
+        return CHARSETS[charset]
+    raise GenerateError(f"Unknown charset '{charset}'. Choose from: {', '.join(CHARSETS)}.")
+
+
+def generate_for_profile(
+    profile: dict[str, str],
+    keys: list[str],
+    length: int = 32,
+    charset: str = "alphanum",
     overwrite: bool = False,
 ) -> GenerateResult:
-    """Generate random values for the given list of keys.
+    """Generate random values for the given keys in a profile."""
+    if length < 1 or length > 512:
+        raise GenerateError("Length must be between 1 and 512.")
 
-    Args:
-        keys: List of environment variable names to generate values for.
-        value_type: Type of value to generate (secret, uuid, password, numeric, bool).
-        length: Optional length hint for types that support it (secret bytes, password/numeric chars).
-        existing: Existing profile dict to check for conflicts.
-        overwrite: If True, overwrite existing keys; otherwise skip them.
+    chars = CHARSET_CHARS(charset)  # validate early
 
-    Returns:
-        GenerateResult containing generated entries and skipped key names.
-    """
-    if value_type not in VALID_TYPES:
-        raise GenerateError(
-            f"Unknown value type '{value_type}'. "
-            f"Valid types: {', '.join(VALID_TYPES)}"
-        )
-
-    result = GenerateResult()
-    existing = existing or {}
+    generated: list[GeneratedKey] = []
+    skipped: list[str] = []
 
     for key in keys:
-        if not key:
+        if not re.match(r"^[A-Z_][A-Z0-9_]*$", key):
+            raise GenerateError(f"Key '{key}' is not a valid env var name.")
+        if key in profile and not overwrite:
+            skipped.append(key)
             continue
-        if key in existing and not overwrite:
-            result.skipped.append(key)
-            continue
-        value = _generate_value(value_type, length)
-        result.generated.append(GeneratedKey(key=key, value=value, type=value_type))
+        value = "".join(secrets.choice(chars) for _ in range(length))
+        profile[key] = value
+        generated.append(GeneratedKey(key=key, value=value, length=length, charset=charset))
 
-    return result
+    return ok(generated, skipped)
 
 
-def format_generate_result(result: GenerateResult) -> str:
-    """Return a human-readable summary of a GenerateResult."""
+def format_generate_result(result: GenerateResult, reveal: bool = False) -> str:
     lines = []
-    if result.generated:
-        lines.append(f"Generated {len(result.generated)} key(s):")
-        for g in result.generated:
-            lines.append(f"  {g.key} [{g.type}] = {g.value}")
-    if result.skipped:
-        lines.append(f"Skipped {len(result.skipped)} existing key(s): {', '.join(result.skipped)}")
+    for g in result.generated:
+        display = g.value if reveal else "*" * min(g.length, 12)
+        lines.append(f"  [generated] {g.key}={display}")
+    for key in result.skipped:
+        lines.append(f"  [skipped]   {key} (already set)")
     if not lines:
-        lines.append("No keys generated.")
+        lines.append("  (nothing generated)")
     return "\n".join(lines)
