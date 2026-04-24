@@ -35,6 +35,10 @@ def cast_run(profile, vault_path, password, schema_json, strict, json_out):
         click.echo(f"Invalid schema JSON: {exc}", err=True)
         sys.exit(2)
 
+    if not isinstance(schema, dict):
+        click.echo("Invalid schema: expected a JSON object mapping keys to types.", err=True)
+        sys.exit(2)
+
     try:
         data = load_profile(vault_path, profile, password)
     except Exception as exc:
