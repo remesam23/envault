@@ -44,11 +44,25 @@ List available profiles:
 envault list
 ```
 
+Remove a profile:
+
+```bash
+envault remove staging
+```
+
+Show the current active profile:
+
+```bash
+envault status
+```
+
 ---
 
 ## How It Works
 
 `envault` encrypts your `.env` files using AES-256 and stores them locally in a `.vault/` directory. Each profile maps to an isolated set of environment variables, making it easy to switch between `development`, `staging`, and `production` configurations without exposing secrets.
+
+> **Note:** Add `.vault/` to your `.gitignore` to avoid accidentally committing encrypted secrets to version control.
 
 ---
 
