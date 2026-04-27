@@ -5,7 +5,6 @@ Allows marking profiles as read-only to prevent accidental modifications.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -30,7 +29,10 @@ def _save_readonly(vault_dir: str, data: dict) -> None:
 
 
 def set_readonly(vault_dir: str, profile: str, reason: Optional[str] = None) -> dict:
-    """Mark a profile as read-only."""
+    """Mark a profile as read-only.
+
+    If the profile is already read-only, its reason is updated.
+    """
     data = _load_readonly(vault_dir)
     data[profile] = {"reason": reason or ""}
     _save_readonly(vault_dir, data)
@@ -38,7 +40,10 @@ def set_readonly(vault_dir: str, profile: str, reason: Optional[str] = None) -> 
 
 
 def unset_readonly(vault_dir: str, profile: str) -> None:
-    """Remove read-only status from a profile."""
+    """Remove read-only status from a profile.
+
+    Raises ReadOnlyError if the profile is not currently marked as read-only.
+    """
     data = _load_readonly(vault_dir)
     if profile not in data:
         raise ReadOnlyError(f"Profile '{profile}' is not marked as read-only.")
@@ -74,3 +79,19 @@ def guard_readonly(vault_dir: str, profile: str) -> None:
         if reason:
             msg += f" Reason: {reason}"
         raise ReadOnlyError(msg)
+
+
+def bulk_set_readonly(
+    vault_dir: str,
+    profiles: list[str],
+    reason: Optional[str] = None,
+) -> dict[str, Optional[str]]:
+    """Mark multiple profiles as read-only in a single write operation.
+
+    Returns a mapping of profile names to their assigned reason.
+    """
+    data = _load_readonly(vault_dir)
+    for profile in profiles:
+        data[profile] = {"reason": reason or ""}
+    _save_readonly(vault_dir, data)
+    return {profile: reason or None for profile in profiles}
