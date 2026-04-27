@@ -37,12 +37,19 @@ envault ttl clear prod
 ## Python API
 
 ```python
-from envault.ttl import set_ttl, is_expired, clear_ttl
+from envault.ttl import set_ttl, get_ttl, is_expired, clear_ttl
 
 set_ttl(".vault", "prod", seconds=3600)
 
+# Retrieve the raw expiry datetime (or None if no TTL is set)
+expiry = get_ttl(".vault", "prod")
+if expiry:
+    print(f"Profile expires at: {expiry}")
+
 if is_expired(".vault", "prod"):
     raise RuntimeError("Profile has expired — re-lock and unlock to refresh.")
+
+clear_ttl(".vault", "prod")
 ```
 
 ## Notes
@@ -50,3 +57,4 @@ if is_expired(".vault", "prod"):
 - TTL metadata is stored in `.ttl.json` inside the vault directory.
 - Expiry is checked against UTC time.
 - TTL does **not** automatically delete profiles; it is advisory.
+- `get_ttl` returns a `datetime` object (UTC) or `None` if no TTL has been set for the profile.
