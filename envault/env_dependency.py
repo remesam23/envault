@@ -1,142 +1,178 @@
-"""env_dependency.py — Track and resolve key dependencies within a profile.
+"""Dependency checking between env keys.
 
-Allows declaring that a key 'depends on' other keys being present,
-and validates or resolves those dependencies.
+Allows defining rules like:
+  - key A requires key B to also be present
+  - key A conflicts with key B (both cannot be set)
+  - key A requires key B to have a specific value
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Tuple
 
 
 class DependencyError(Exception):
-    """Raised when a dependency operation fails."""
+    """Raised for invalid dependency rule definitions."""
 
 
 @dataclass
 class DependencyViolation:
+    rule_type: str  # 'requires', 'conflicts', 'requires_value'
     key: str
-    missing_deps: List[str]
+    dependency: str
+    message: str
 
     def __str__(self) -> str:
-        deps = ", ".join(self.missing_deps)
-        return f"'{self.key}' requires missing keys: {deps}"
+        return self.message
 
 
 @dataclass
 class DependencyResult:
-    satisfied: List[str]  # keys whose dependencies are all present
-    violations: List[DependencyViolation]  # keys with unmet dependencies
-    skipped: List[str]  # keys not covered by any rule
+    violations: List[DependencyViolation] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return len(self.violations) == 0
 
+    def summary(self) -> str:
+        if self.ok:
+            return "All dependency rules satisfied."
+        lines = [f"{len(self.violations)} violation(s) found:"]
+        for v in self.violations:
+            lines.append(f"  [{v.rule_type}] {v.message}")
+        return "\n".join(lines)
 
-def ok(satisfied: List[str], skipped: List[str]) -> DependencyResult:
-    """Convenience constructor for a passing result."""
-    return DependencyResult(satisfied=satisfied, violations=[], skipped=skipped)
+
+@dataclass
+class DependencyRules:
+    """Container for all dependency rules for a profile."""
+
+    # key -> list of keys that must also be present
+    requires: Dict[str, List[str]] = field(default_factory=dict)
+
+    # key -> list of keys that must NOT also be present
+    conflicts: Dict[str, List[str]] = field(default_factory=dict)
+
+    # (key, dependency_key) -> required value for dependency_key
+    requires_value: List[Tuple[str, str, str]] = field(default_factory=list)
 
 
 def check_dependencies(
     profile: Dict[str, str],
-    rules: Dict[str, List[str]],
+    rules: DependencyRules,
 ) -> DependencyResult:
-    """Check that each key's declared dependencies exist in the profile.
+    """Check a profile dict against a set of dependency rules.
 
     Args:
-        profile: The env key/value mapping to validate.
-        rules: A dict mapping key -> list of keys it depends on.
-               Example: {"DB_URL": ["DB_HOST", "DB_PORT"]}
+        profile: Mapping of env key -> value.
+        rules: DependencyRules instance describing constraints.
 
     Returns:
-        DependencyResult with satisfied keys, violations, and uncovered keys.
+        DependencyResult with any violations found.
     """
-    present: Set[str] = set(profile.keys())
-    covered: Set[str] = set(rules.keys())
-
-    satisfied: List[str] = []
     violations: List[DependencyViolation] = []
 
-    for key, deps in rules.items():
-        missing = [d for d in deps if d not in present]
-        if missing:
-            violations.append(DependencyViolation(key=key, missing_deps=missing))
-        else:
-            satisfied.append(key)
-
-    skipped = sorted(present - covered)
-    return DependencyResult(satisfied=sorted(satisfied), violations=violations, skipped=skipped)
-
-
-def resolve_order(
-    rules: Dict[str, List[str]],
-) -> List[str]:
-    """Return a topological sort of keys based on dependency rules.
-
-    Raises DependencyError if a cycle is detected.
-
-    Args:
-        rules: A dict mapping key -> list of keys it depends on.
-
-    Returns:
-        Ordered list of keys from least dependent to most dependent.
-    """
-    # Build full node set
-    all_keys: Set[str] = set(rules.keys())
-    for deps in rules.values():
-        all_keys.update(deps)
-
-    # Kahn's algorithm
-    in_degree: Dict[str, int] = {k: 0 for k in all_keys}
-    graph: Dict[str, List[str]] = {k: [] for k in all_keys}
-
-    for key, deps in rules.items():
+    # Check 'requires' rules
+    for key, deps in rules.requires.items():
+        if key not in profile:
+            continue
         for dep in deps:
-            graph[dep].append(key)
-            in_degree[key] += 1
+            if dep not in profile:
+                violations.append(
+                    DependencyViolation(
+                        rule_type="requires",
+                        key=key,
+                        dependency=dep,
+                        message=f"'{key}' requires '{dep}' to be present, but it is missing.",
+                    )
+                )
 
-    queue = sorted(k for k, deg in in_degree.items() if deg == 0)
-    order: List[str] = []
+    # Check 'conflicts' rules (only report once per pair)
+    seen_conflicts: set = set()
+    for key, conflicting in rules.conflicts.items():
+        if key not in profile:
+            continue
+        for other in conflicting:
+            if other not in profile:
+                continue
+            pair = tuple(sorted([key, other]))
+            if pair in seen_conflicts:
+                continue
+            seen_conflicts.add(pair)
+            violations.append(
+                DependencyViolation(
+                    rule_type="conflicts",
+                    key=key,
+                    dependency=other,
+                    message=f"'{key}' conflicts with '{other}': both are set.",
+                )
+            )
 
-    while queue:
-        node = queue.pop(0)
-        order.append(node)
-        for neighbor in sorted(graph[node]):
-            in_degree[neighbor] -= 1
-            if in_degree[neighbor] == 0:
-                queue.append(neighbor)
+    # Check 'requires_value' rules
+    for key, dep_key, required_val in rules.requires_value:
+        if key not in profile:
+            continue
+        if dep_key not in profile:
+            violations.append(
+                DependencyViolation(
+                    rule_type="requires_value",
+                    key=key,
+                    dependency=dep_key,
+                    message=(
+                        f"'{key}' requires '{dep_key}' to be present "
+                        f"with value '{required_val}', but '{dep_key}' is missing."
+                    ),
+                )
+            )
+        elif profile[dep_key] != required_val:
+            violations.append(
+                DependencyViolation(
+                    rule_type="requires_value",
+                    key=key,
+                    dependency=dep_key,
+                    message=(
+                        f"'{key}' requires '{dep_key}' = '{required_val}', "
+                        f"but got '{profile[dep_key]}'."
+                    ),
+                )
+            )
 
-    if len(order) != len(all_keys):
-        raise DependencyError(
-            "Cycle detected in dependency rules; cannot determine resolution order."
-        )
-
-    return order
+    return DependencyResult(violations=violations)
 
 
-def format_dependency_result(result: DependencyResult) -> str:
-    """Render a DependencyResult as a human-readable string."""
-    lines: List[str] = []
+def rules_from_dict(raw: dict) -> DependencyRules:
+    """Build a DependencyRules object from a plain dict (e.g. loaded from JSON/YAML).
 
-    if result.satisfied:
-        lines.append("Satisfied:")
-        for k in result.satisfied:
-            lines.append(f"  ✓ {k}")
+    Expected format::
 
-    if result.violations:
-        lines.append("Violations:")
-        for v in result.violations:
-            lines.append(f"  ✗ {v}")
+        {
+          "requires": {"DATABASE_URL": ["DATABASE_NAME"]},
+          "conflicts": {"DEBUG": ["PRODUCTION"]},
+          "requires_value": [["USE_SSL", "SSL_MODE", "verify-full"]]
+        }
+    """
+    requires = raw.get("requires", {})
+    conflicts = raw.get("conflicts", {})
+    requires_value_raw = raw.get("requires_value", [])
 
-    if result.skipped:
-        lines.append(f"Skipped (no rules): {', '.join(result.skipped)}")
+    if not isinstance(requires, dict):
+        raise DependencyError("'requires' must be a dict mapping key -> list of keys")
+    if not isinstance(conflicts, dict):
+        raise DependencyError("'conflicts' must be a dict mapping key -> list of keys")
+    if not isinstance(requires_value_raw, list):
+        raise DependencyError("'requires_value' must be a list of [key, dep_key, value] triples")
 
-    if not lines:
-        return "No dependency rules defined."
+    requires_value: List[Tuple[str, str, str]] = []
+    for item in requires_value_raw:
+        if not (isinstance(item, (list, tuple)) and len(item) == 3):
+            raise DependencyError(
+                f"Each 'requires_value' entry must be [key, dep_key, value], got: {item!r}"
+            )
+        requires_value.append((str(item[0]), str(item[1]), str(item[2])))
 
-    status = "OK" if result.ok else "FAILED"
-    lines.insert(0, f"Dependency check: {status}")
-    return "\n".join(lines)
+    return DependencyRules(
+        requires={k: list(v) for k, v in requires.items()},
+        conflicts={k: list(v) for k, v in conflicts.items()},
+        requires_value=requires_value,
+    )
