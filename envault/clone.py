@@ -28,7 +28,15 @@ def clone_profile(
 
     Returns:
         The dict that was saved to *dst*.
+
+    Raises:
+        CloneError: If the source profile does not exist, the destination
+            profile already exists and *overwrite* is False, or *src* and
+            *dst* refer to the same profile name.
     """
+    if src == dst:
+        raise CloneError("Source and destination profile names must be different.")
+
     profiles = list_profiles(vault_path)
 
     if src not in profiles:
