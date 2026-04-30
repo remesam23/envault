@@ -30,6 +30,17 @@ def pivot_by_prefix(
     """Group keys by their prefix (part before the first delimiter).
 
     Keys with a unique prefix (below min_group_size) end up in 'ungrouped'.
+
+    Args:
+        profile: A flat dictionary of environment variable key-value pairs.
+        delimiter: The character used to split keys into prefix and remainder.
+            Defaults to ``"_"``.
+        min_group_size: Minimum number of keys required for a prefix to form
+            its own group.  Prefixes with fewer keys are placed in
+            ``ungrouped``.  Defaults to ``1``.
+
+    Returns:
+        A :class:`PivotResult` containing grouped and ungrouped keys.
     """
     if not profile:
         return ok(groups={}, ungrouped={})
